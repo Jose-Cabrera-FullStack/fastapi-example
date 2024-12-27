@@ -1,0 +1,38 @@
+# Example pylintrc
+
+[MASTER]
+# Specify a Python version (optional)
+ignore=__init__.py
+ignore-patterns=.*\.pyc,.*\.pyo,.*\.pyd,__init__.py
+
+# Add custom rules, plugins, or configurations here
+disable=missing-docstring, invalid-name, too-few-public-methods, unnecessary-pass, unused-argument, unused-import, trailing-whitespace, E0401, R0901, E0611, R0913, W0212
+
+[FORMAT]
+# Maximum number of characters on a single line.
+max-line-length=100
+
+[MESSAGES CONTROL]
+# Customize message control: https://pylint.pycqa.org/en/latest/user_guide/message-control.html
+# Disable the message, report, category or checker with the given id(s). 
+disable=missing-docstring, no-self-argument
+
+[REPORTS]
+# Customize reports: https://pylint.pycqa.org/en/latest/user_guide/output.html
+# Set the output format. Available formats are text, parseable, colorized, json and msvs (visual studio).
+output-format=text
+
+[TYPECHECK]
+# Configure type checking: https://pylint.pycqa.org/en/latest/user_guide/checking_type.html
+
+[DESIGN]
+# Maximum number of arguments for function / method.
+max-args=10
+
+# Maximum number of local variables for function / method body.
+max-locals=20
+
+[LOGGING]
+# Configure logging: https://pylint.pycqa.org/en/latest/user_guide/logging.html
+# Logging modules to check that the string format arguments are in logging function parameter format
+logging-modules=logging

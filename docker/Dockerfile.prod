@@ -1,0 +1,36 @@
+# Dockerfile
+
+# pull the official docker image
+FROM python:3.11.1-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends\
+    build-essential \
+    libpq-dev \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*  \
+    libpq-dev
+
+
+# set work directory
+WORKDIR /app
+
+# set env variables
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# install dependencies
+COPY requirements.txt .
+RUN pip install psycopg2
+RUN pip install sqlparse
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
+
+# copy project
+COPY app/ /app/app
+COPY requirements.txt /app/
+COPY alembic.ini /app/
+COPY alembic/ /app/alembic/
+COPY README.md  /app/   
+
+# Command to start the FastAPI application with Uvicorn
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

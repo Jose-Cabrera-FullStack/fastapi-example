@@ -1,0 +1,31 @@
+# IDE configuration files
+.vscode/
+.idea/
+
+# Version control files
+.git/
+.gitignore
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporary files
+*.tmp
+*.log
+
+# Local dependencies
+venv/
+.env
+
+# Build files and artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Security files
+*.pem
+*.key
+*.crt

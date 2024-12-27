@@ -1,0 +1,188 @@
+stages:
+  - compile
+  - linting
+  - test
+  - sonarqube-check
+  - build
+  - deploy
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  VENV_PATH: "$CI_PROJECT_DIR/venv"
+  DOCKER_IMAGE: $CI_REGISTRY/paracas/payment-service
+  DEVELOPMENT_HOST: "10.20.5.144"
+  STAGING_HOST: "10.20.5.145"
+  MAIN_HOST: "192.168.28.14"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cache/pip/
+    - venv/
+    - coverage.xml
+
+compile:
+  stage: compile
+  image: python:3.11.1-slim
+  variables:
+    PYTHONPATH: "${CI_PROJECT_DIR}/app"
+  script:
+    - python -m venv $VENV_PATH
+    - source $VENV_PATH/bin/activate
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+  cache:
+    paths:
+      - venv/
+      - .cache/pip/
+  only:
+    - merge_requests
+    - development
+    - staging
+    - main
+
+linting:
+  stage: linting
+  image: python:3.11.1-slim
+  variables:
+    PYTHONPATH: "${CI_PROJECT_DIR}/app"
+  script:
+    - apt-get update && apt-get install -y git
+    - pip install pylint
+    - git config --global http.sslVerify false
+    - git fetch origin
+    - |
+      if git rev-parse --verify ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME} >/dev/null 2>&1; then
+        git checkout ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}
+      else
+        git checkout -b ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME} origin/${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}
+      fi
+    - |
+      if git rev-parse --verify ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} >/dev/null 2>&1; then
+        git checkout ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
+      else
+        git checkout -b ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}
+      fi
+    - for file in $(git diff --name-only ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME} ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} | grep '\.py$'); do pylint "$file"; done
+  allow_failure: true
+  only:
+    - merge_requests
+    - development
+    - staging
+    - main
+
+test:
+  stage: test
+  image: python:3.11.1-slim
+  script:
+    - source $VENV_PATH/bin/activate
+    - python -m pytest --cov=app --cov-report=xml --cov-report=term-missing --cov-config=.coveragerc
+  artifacts:
+    paths:
+      - coverage.xml
+    when: always
+  cache:
+    paths:
+      - venv/
+      - .cache/pip/
+      - coverage.xml
+  only:
+    - merge_requests
+    - development
+    - staging
+    - main
+
+sonarqube-check:
+  stage: sonarqube-check
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
+    SONAR_SCANNER_OPTS: "-Dsonar.python.coverage.reportPaths=coverage.xml"
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+      - venv/
+      - .cache/pip/
+      - coverage.xml
+  script:
+    - sonar-scanner -Dsonar.projectKey=PORT_PARACAS_PAYMENT_SERVICE -Dsonar.qualitygate.wait=true -Dsonar.python.coveragePlugin=.coveragerc
+  allow_failure: true
+  only:
+    - merge_requests
+    - development
+    - staging
+    - main
+
+build:
+  stage: build
+  image: docker:19.03.12
+  services:
+    - docker:19.03.12-dind
+  variables:
+    DOCKER_IMAGE: $CI_REGISTRY/paracas/payment-service
+  before_script:
+    - echo $DOCKER_REGISTRY_PASSWORD | docker login -u $DOCKER_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - SAFE_TAG=$(echo $CI_COMMIT_REF_NAME | sed 's/\//-/g')
+    - DOCKER_IMAGE_TAG="$SAFE_TAG-$CI_COMMIT_SHORT_SHA"
+    - docker build -t $DOCKER_IMAGE:$DOCKER_IMAGE_TAG -f docker/Dockerfile.prod .
+    - docker push $DOCKER_IMAGE:$DOCKER_IMAGE_TAG
+  only:
+    - merge_requests
+    - development
+    - staging
+    - main
+
+deploy:
+  stage: deploy
+  dependencies:
+    - build
+  before_script:
+    - mkdir -p ~/.ssh
+    - echo -e "$PAYMENT_SERVICE_DEV_SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - chmod 700 -R ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+  script:
+    - SAFE_TAG=$(echo $CI_COMMIT_REF_NAME | sed 's/\//-/g')
+    - DOCKER_IMAGE_TAG="$SAFE_TAG-$CI_COMMIT_SHORT_SHA"
+    # Determinar el host de despliegue según la rama
+    - |
+      if [[ "$CI_COMMIT_REF_NAME" == "development" ]]; then
+        DEPLOY_HOST=$DEVELOPMENT_HOST
+      elif [[ "$CI_COMMIT_REF_NAME" == "staging" ]]; then
+        DEPLOY_HOST=$STAGING_HOST
+      elif [[ "$CI_COMMIT_REF_NAME" == "main" ]]; then
+        DEPLOY_HOST=$MAIN_HOST
+      else
+        echo "Rama no soportada para despliegue: $CI_COMMIT_REF_NAME"
+        exit 1
+      fi
+    # Autenticarse en el registro de Docker
+    - ssh -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=no root@$DEPLOY_HOST  'echo "XzKUC3jtD9VsQqKXERmE" | docker login -u "gitlab+deploy-token-2" --password-stdin "10.20.5.140:5005"'
+    # Imprimir la imagen y etiqueta que se va a desplegar
+    - ssh -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=no root@$DEPLOY_HOST  "echo \$DOCKER_IMAGE:\$DOCKER_IMAGE_TAG"
+    # Hacer pull de la imagen
+    - ssh -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=no root@$DEPLOY_HOST  "docker pull \"$DOCKER_IMAGE:$DOCKER_IMAGE_TAG\""
+    # Detener el contenedor actual si está corriendo
+    - ssh -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=no root@$DEPLOY_HOST  "docker stop payment_service_container || true"
+    # Eliminar el contenedor actual si existe
+    - ssh -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=no root@$DEPLOY_HOST  "docker rm payment_service_container || true"
+    # Desplegar la nueva imagen
+    # - ssh -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=no root@$DEPLOY_HOST  "docker run -d --name payment_service_container $DOCKER_IMAGE:$DOCKER_IMAGE_TAG"
+    - ssh -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=no root@$DEPLOY_HOST  "docker run -d --name payment_service_container -p 8000:8000  -e DATABASE_URL=postgresql://paracas:paracas2024@172.17.0.1:5432/payment_service \"$DOCKER_IMAGE:$DOCKER_IMAGE_TAG\""
+  only:
+    - merge_requests
+    - development
+    - staging
+    - main
+
+  when: manual
+# PENDIENTE:
+#    - Migraciones:
+#        docker-compose exec -T app bash -c \"alembic revision --autogenerate -m 'migration message'\" &&
+#        docker-compose exec -T app bash -c \"alembic upgrade head\"
